@@ -3,7 +3,6 @@ package exts
 import (
 	"container/list"
 	"errors"
-	"os"
 	"sync"
 )
 
@@ -43,7 +42,11 @@ func NewHost() ExtsHost {
 	return host
 }
 
-func (host *extsHost) Load(name, path string, args ...string) (*Extension, error) {
+func (host *extsHost) Running() bool {
+	return !host.stopping
+}
+
+func (host *extsHost) Load(name, path string, args ...string) (Extension, error) {
 	host.mutex.Lock()
 	defer host.mutex.Unlock()
 	if host.stopping {
@@ -59,7 +62,7 @@ func (host *extsHost) Load(name, path string, args ...string) (*Extension, error
 	}
 }
 
-func (host *extsHost) Find(name string) *Extension {
+func (host *extsHost) Find(name string) Extension {
 	host.mutex.RLock()
 	defer host.mutex.RUnlock()
 	return host.exts[name]
@@ -81,7 +84,7 @@ func (host *extsHost) WaitEvent() (*Event, error) {
 		}
 
 		if elem != nil {
-			event := elem.Value.(*hostEvent), nil
+			event := elem.Value.(*hostEvent)
 			switch event.eventType {
 			case eventData:
 				return event.extEvent, nil

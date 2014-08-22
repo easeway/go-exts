@@ -31,7 +31,7 @@ type extProcess struct {
 
 func startExtProcess(path string, args []string) (*extProcess, error) {
 	process := &extProcess{
-		cmd: exec.Command(path, args),
+		cmd: exec.Command(path, args...),
 	}
 
 	var err error
@@ -95,19 +95,24 @@ type message struct {
 	Error string          `json:"error"`
 }
 
+func encodeMessageRaw(event, name string, id uint32, data []byte) ([]byte, error) {
+	if encoded, err := json.Marshal(&message{
+		Event: event,
+		Name:  name,
+		Data:  data,
+		Id:    id,
+	}); err == nil {
+		return append(encoded, '\n'), nil
+	} else {
+		return nil, err
+	}
+}
+
 func encodeMessage(event, name string, id uint32, data interface{}) ([]byte, error) {
 	if encoded, err := json.Marshal(data); err != nil {
 		return nil, err
 	} else {
-		if encoded, err = json.Marshal(&message{
-			Event: event,
-			Name:  name,
-			Data:  encoded,
-			Id:    id,
-		}); err != nil {
-			return nil, err
-		}
-		return append(encoded, '\n'), nil
+		return encodeMessageRaw(event, name, id, encoded)
 	}
 }
 
@@ -129,7 +134,7 @@ func encodeMessageErr(event, name string, id uint32, data interface{}, e error) 
 }
 
 func newMonitor(host *extsHost, name, path string, args []string) *extMonitor {
-	ext = &extMonitor{
+	ext := &extMonitor{
 		host:   host,
 		name:   name,
 		path:   path,
@@ -156,7 +161,8 @@ func (ext *extMonitor) emitError(name string, err error) {
 }
 
 func (ext *extMonitor) start() error {
-	if process, err := startExtProcess(ext.path, ext.args); err != nil {
+	process, err := startExtProcess(ext.path, ext.args)
+	if err != nil {
 		return err
 	}
 
@@ -198,24 +204,25 @@ func (ext *extMonitor) processOutput() {
 
 	reader := bufio.NewReader(ext.process.stdout)
 	for ext.isActive() {
-		line, err := reader.ReadString("\n")
+		line, err := reader.ReadString('\n')
 
 		var msg message
-		if json.Unmarshal(bytes.NewBufferString(line), &msg) == nil {
+		if json.Unmarshal(bytes.NewBufferString(line).Bytes(), &msg) == nil {
+			var data []byte = msg.Data
 			switch msg.Event {
 			case eventEvent:
 				ext.host.pushEvent(&hostEvent{
 					eventType: eventData,
 					extEvent: &Event{
 						Name: msg.Name,
-						Data: msg.Data,
+						Data: data,
 						Ext:  ext,
 					},
 				})
 			case eventInvoke:
 				ext.mutex.Lock()
 				if resp, exists := ext.replies[msg.Id]; exists {
-					resp.data = msg.Data
+					resp.data = data
 					if len(msg.Error) > 0 {
 						resp.err = errors.New(msg.Error)
 					}
@@ -253,6 +260,10 @@ func (ext *extMonitor) run() {
 	ext.host.extsWg.Done()
 }
 
+func (ext *extMonitor) Name() string {
+	return ext.name
+}
+
 func (ext *extMonitor) Notify(event string, data interface{}) error {
 	ext.mutex.Lock()
 	defer ext.mutex.Unlock()
@@ -267,6 +278,14 @@ func (ext *extMonitor) Notify(event string, data interface{}) error {
 }
 
 func (ext *extMonitor) Invoke(action string, params interface{}) (Reply, error) {
+	if encoded, err := json.Marshal(params); err == nil {
+		return ext.InvokeRaw(action, encoded)
+	} else {
+		return nil, err
+	}
+}
+
+func (ext *extMonitor) InvokeRaw(action string, params []byte) (Reply, error) {
 	ext.mutex.Lock()
 	defer ext.mutex.Unlock()
 
@@ -274,7 +293,7 @@ func (ext *extMonitor) Invoke(action string, params interface{}) (Reply, error) 
 		return nil, errorInactive
 	}
 	id := atomic.AddUint32(&ext.invokeId, 1)
-	encoded, err := encodeMessage(eventInvoke, action, id, params)
+	encoded, err := encodeMessageRaw(eventInvoke, action, id, params)
 	if err == nil {
 		ext.replies[id] = &response{}
 		_, err = ext.process.stdin.Write(encoded)
@@ -284,7 +303,6 @@ func (ext *extMonitor) Invoke(action string, params interface{}) (Reply, error) 
 	if err == nil {
 		for ext.isActive() {
 			ext.cond.Wait()
-			var exists bool
 			if resp, exists := ext.replies[id]; exists {
 				data = resp.data
 				err = resp.err

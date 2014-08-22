@@ -23,7 +23,7 @@ type Dispatcher interface {
 func NewDispatcher() Dispatcher {
 	return &dispatcher{
 		eventHandlers:  make(map[string]*list.List),
-		actionHandlers: make(map[string]*list.List),
+		actionHandlers: make(map[string]RequestHandler),
 		input:          os.Stdin,
 		output:         os.Stdout,
 	}
@@ -67,9 +67,9 @@ func (d *dispatcher) Notify(event string, data interface{}) error {
 func (d *dispatcher) Run() error {
 	reader := bufio.NewReader(d.input)
 	for {
-		line, err := reader.ReadString("\n")
+		line, err := reader.ReadString('\n')
 		var msg message
-		if json.Unmarshal(bytes.NewBufferString(line), &msg) == nil {
+		if json.Unmarshal(bytes.NewBufferString(line).Bytes(), &msg) == nil {
 			switch msg.Event {
 			case eventEvent:
 				d.dispatchEvent(msg.Name, msg.Data)
