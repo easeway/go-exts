@@ -6,6 +6,7 @@ import (
 	"container/list"
 	"encoding/json"
 	"io"
+	"log"
 	"os"
 	"sync"
 )
@@ -18,6 +19,7 @@ type Dispatcher interface {
 	Do(action string, handler RequestHandler) Dispatcher
 	Notify(event string, data interface{}) error
 	Run() error
+	Logger(prefix string, flag int) *log.Logger
 }
 
 func NewDispatcher() Dispatcher {
@@ -82,6 +84,10 @@ func (d *dispatcher) Run() error {
 		}
 	}
 	return nil
+}
+
+func (d *dispatcher) Logger(prefix string, flag int) *log.Logger {
+	return log.New(os.Stderr, prefix, flag)
 }
 
 func (d *dispatcher) dispatchEvent(name string, data []byte) {

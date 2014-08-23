@@ -84,6 +84,7 @@ func (host *extsHost) WaitEvent() (*Event, error) {
 		}
 
 		if elem != nil {
+			host.events.Remove(elem)
 			event := elem.Value.(*hostEvent)
 			switch event.eventType {
 			case eventData:

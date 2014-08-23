@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"os/exec"
 	"sync"
 	"sync/atomic"
@@ -45,6 +46,7 @@ func startExtProcess(path string, args []string) (*extProcess, error) {
 		return nil, err
 	}
 
+	process.cmd.Stderr = os.Stderr
 	if err = process.cmd.Start(); err != nil {
 		process.Close()
 		return nil, err
@@ -135,11 +137,12 @@ func encodeMessageErr(event, name string, id uint32, data interface{}, e error) 
 
 func newMonitor(host *extsHost, name, path string, args []string) *extMonitor {
 	ext := &extMonitor{
-		host:   host,
-		name:   name,
-		path:   path,
-		args:   args,
-		active: true,
+		host:    host,
+		name:    name,
+		path:    path,
+		args:    args,
+		active:  true,
+		replies: make(map[uint32]*response),
 	}
 	ext.cond = sync.NewCond(&ext.mutex)
 	return ext
