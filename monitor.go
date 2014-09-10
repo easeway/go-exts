@@ -22,6 +22,7 @@ const (
 
 var (
 	errorInactive = errors.New("Extension is inactive")
+	errorNotStart = errors.New("Process not started")
 )
 
 type extProcess struct {
@@ -273,6 +274,9 @@ func (ext *extMonitor) Notify(event string, data interface{}) error {
 	if !ext.isActive() {
 		return errorInactive
 	}
+	if ext.process == nil {
+		return errorNotStart
+	}
 	encoded, err := encodeMessage(eventEvent, event, 0, data)
 	if err == nil {
 		_, err = ext.process.stdin.Write(encoded)
@@ -294,6 +298,9 @@ func (ext *extMonitor) InvokeRaw(action string, params []byte) (Reply, error) {
 
 	if !ext.isActive() {
 		return nil, errorInactive
+	}
+	if ext.process == nil {
+		return nil, errorNotStart
 	}
 	id := atomic.AddUint32(&ext.invokeId, 1)
 	encoded, err := encodeMessageRaw(eventInvoke, action, id, params)
