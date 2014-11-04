@@ -2,10 +2,10 @@ package exts
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"sync"
@@ -211,7 +211,8 @@ func (ext *extMonitor) processOutput() {
 		line, err := reader.ReadString('\n')
 
 		var msg message
-		if json.Unmarshal(bytes.NewBufferString(line).Bytes(), &msg) == nil {
+		if json.Unmarshal([]byte(line), &msg) == nil {
+			log.Println(ext.name + " << " + line)
 			var data []byte = msg.Data
 			switch msg.Event {
 			case eventEvent:
@@ -234,6 +235,8 @@ func (ext *extMonitor) processOutput() {
 				}
 				ext.mutex.Unlock()
 			}
+		} else if err == nil {
+			log.Println(ext.name + " !! " + line)
 		}
 
 		if err != nil {
@@ -243,6 +246,12 @@ func (ext *extMonitor) processOutput() {
 			break
 		}
 	}
+}
+
+func (ext *extMonitor) send(data []byte) error {
+	log.Println(ext.name + " >> " + string(data))
+	_, err := ext.process.stdin.Write(data)
+	return err
 }
 
 func (ext *extMonitor) run() {
@@ -279,7 +288,7 @@ func (ext *extMonitor) Notify(event string, data interface{}) error {
 	}
 	encoded, err := encodeMessage(eventEvent, event, 0, data)
 	if err == nil {
-		_, err = ext.process.stdin.Write(encoded)
+		err = ext.send(encoded)
 	}
 	return err
 }
@@ -302,29 +311,28 @@ func (ext *extMonitor) InvokeRaw(action string, params []byte) (Reply, error) {
 	if ext.process == nil {
 		return nil, errorNotStart
 	}
+
+	resp := &response{}
 	id := atomic.AddUint32(&ext.invokeId, 1)
+
 	encoded, err := encodeMessageRaw(eventInvoke, action, id, params)
 	if err == nil {
-		ext.replies[id] = &response{}
-		_, err = ext.process.stdin.Write(encoded)
+		ext.replies[id] = resp
+		err = ext.send(encoded)
 	}
 
-	var data Reply
 	if err == nil {
+		err = errorInactive
 		for ext.isActive() {
 			ext.cond.Wait()
-			if resp, exists := ext.replies[id]; exists {
-				data = resp.data
+			if resp.data != nil || resp.err != nil {
 				err = resp.err
 				break
 			}
 		}
-		if data == nil {
-			err = errorInactive
-		}
 	}
 	delete(ext.replies, id)
-	return data, err
+	return resp.data, err
 }
 
 func (ext *extMonitor) Unload() error {
