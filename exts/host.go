@@ -23,7 +23,7 @@ func NewExtensionHost() *ExtensionHost {
 func (h *ExtensionHost) LoadCmd(name string, cmd *exec.Cmd) *LoadedExtension {
 	ext := &LoadedExtension{}
 	ext.Stream = RespawnProcStreamFromCmd(cmd)
-	ext.Stream.Cmd.Stderr = os.Stdout
+	ext.Stream.Cmd.Stderr = os.Stderr
 	ext.StreamPipe = ext.Stream.Pipe()
 	v := NewInvokerPipe(ext.StreamPipe)
 	ext.Invoker = v
