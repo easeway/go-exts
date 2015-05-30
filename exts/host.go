@@ -25,12 +25,10 @@ func (h *ExtensionHost) LoadCmd(name string, cmd *exec.Cmd) *LoadedExtension {
 	ext.Stream = RespawnProcStreamFromCmd(cmd)
 	ext.Stream.Cmd.Stderr = os.Stdout
 	ext.StreamPipe = ext.Stream.Pipe()
-	ext.StreamPipe.TraceName = name
-	v := NewInvokerPipeRunner(ext.StreamPipe)
+	v := NewInvokerPipe(ext.StreamPipe)
 	ext.Invoker = v
-	ext.Pipe = v.Pipe()
+	ext.Pipe = v
 	h.Dispatcher.AddPipe(name, ext.Pipe)
-	ext.Stream.Start()
 	return ext
 }
 
@@ -49,6 +47,14 @@ func (h *ExtensionHost) Run() {
 
 func (h *ExtensionHost) Close() error {
 	return h.Dispatcher.Close()
+}
+
+func (ext *LoadedExtension) Start() {
+	ext.Stream.Start()
+}
+
+func (ext *LoadedExtension) Run() {
+	ext.Stream.Run()
 }
 
 func SplitCommandLine(cmd string) []string {

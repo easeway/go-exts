@@ -21,26 +21,18 @@ type Message struct {
 	Error string          `json:"error,omitempty"`
 }
 
-type RecvPacket struct {
-	Message *Message
-	Raw     RawMessage
-	Error   error
-}
-
-type SendPacket struct {
-	Message *Message
-	Options []interface{}
-	Result  chan *SendReceipt
-}
-
-type SendReceipt struct {
-	Error error
-	Data  interface{}
-}
-
 type MessagePipe interface {
 	io.Closer
-	RecvChan() <-chan *RecvPacket
-	Send(*Message, ...interface{}) *SendReceipt
-	Run()
+	Recv() (*Message, error)
+	Send(*Message, ...interface{}) error
+}
+
+func RunPipe(pipe MessagePipe) error {
+	for {
+		if msg, err := pipe.Recv(); err != nil {
+			return err
+		} else if msg == nil {
+			return nil
+		}
+	}
 }

@@ -29,16 +29,12 @@ func (p *namedPipeWrapper) Close() error {
 	return p.pipe.Close()
 }
 
-func (p *namedPipeWrapper) RecvChan() <-chan *RecvPacket {
-	return p.pipe.RecvChan()
+func (p *namedPipeWrapper) Recv() (*Message, error) {
+	return p.pipe.Recv()
 }
 
-func (p *namedPipeWrapper) Send(msg *Message, options ...interface{}) *SendReceipt {
+func (p *namedPipeWrapper) Send(msg *Message, options ...interface{}) error {
 	return p.pipe.Send(msg, options...)
-}
-
-func (p *namedPipeWrapper) Run() {
-	p.pipe.Run()
 }
 
 func (p *namedPipeWrapper) Name() string {
@@ -58,7 +54,7 @@ func NewMultiPipeDispatcher() MultiPipeDispatcher {
 }
 
 func (d *multiPipeDispatcher) AddPipe(name string, pipe MessagePipe) MultiPipeDispatcher {
-	d.pipes[name] = &namedPipeWrapper{name, NewDispatchPipeRunnerWithHandlers(pipe, d.handlers).Pipe()}
+	d.pipes[name] = &namedPipeWrapper{name, NewDispatchPipeWithHandlers(pipe, d.handlers)}
 	return d
 }
 
@@ -78,11 +74,15 @@ func (d *multiPipeDispatcher) Broadcast(event string, payload RawMessage) {
 		Name:  event,
 		Data:  json.RawMessage(payload),
 	}
+	var wg sync.WaitGroup
 	for _, pipe := range d.pipes {
+		wg.Add(1)
 		go func(pipe MessagePipe) {
+			wg.Done()
 			pipe.Send(msg)
 		}(pipe)
 	}
+	wg.Wait()
 }
 
 func (d *multiPipeDispatcher) Invoker(name string) Invoker {
@@ -97,8 +97,7 @@ func (d *multiPipeDispatcher) Run() {
 	for _, pipe := range d.pipes {
 		wg.Add(1)
 		go func(pipe MessagePipe) {
-			UnconnectedEnd(pipe)
-			pipe.Run()
+			pipe.Recv()
 			wg.Done()
 		}(pipe)
 	}
@@ -106,10 +105,14 @@ func (d *multiPipeDispatcher) Run() {
 }
 
 func (d *multiPipeDispatcher) Close() error {
+	var wg sync.WaitGroup
 	for _, pipe := range d.pipes {
+		wg.Add(1)
 		go func(pipe MessagePipe) {
 			pipe.Close()
+			wg.Done()
 		}(pipe)
 	}
+	wg.Wait()
 	return nil
 }

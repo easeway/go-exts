@@ -3,6 +3,7 @@ package exts
 import (
 	"encoding/json"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -14,6 +15,7 @@ var (
 
 type InvokeOptions struct {
 	Timeout time.Duration
+	Reply   *Message
 }
 
 type Invoker interface {
@@ -116,130 +118,125 @@ type PipeInvoker struct {
 }
 
 func (v *PipeInvoker) Invoke(action string, payload RawMessage, timeout time.Duration) (RawMessage, error) {
-	receipt := v.Pipe.Send(&Message{
+	option := &InvokeOptions{Timeout: timeout}
+	err := v.Pipe.Send(&Message{
 		Event: MsgInvoke,
 		Name:  action,
 		Data:  json.RawMessage(payload),
-	}, &InvokeOptions{Timeout: timeout})
-	if receipt == nil {
-		return nil, nil
+	}, option)
+	if option.Reply == nil {
+		return nil, err
 	}
-	if rawMsg, ok := receipt.Data.(RawMessage); ok {
-		return rawMsg, receipt.Error
-	}
-	return nil, receipt.Error
+	return RawMessage(option.Reply.Data), err
 }
 
 func (v *PipeInvoker) Notify(event string, payload RawMessage) error {
-	receipt := v.Pipe.Send(&Message{
+	return v.Pipe.Send(&Message{
 		Event: MsgNotify,
 		Name:  event,
 		Data:  json.RawMessage(payload),
 	})
-	if receipt != nil {
-		return receipt.Error
-	}
-	return nil
 }
 
-type InvokerPipeRunner struct {
-	pipe        *PipeBase
+type InvokerPipe struct {
+	Pipe MessagePipe
+
 	invocations map[uint32]chan *Message
+	lock        sync.RWMutex
 	id          uint32
 }
 
-func NewInvokerPipeRunner(source MessagePipe) *InvokerPipeRunner {
-	v := &InvokerPipeRunner{
+func NewInvokerPipe(source MessagePipe) *InvokerPipe {
+	return &InvokerPipe{
+		Pipe:        source,
 		invocations: make(map[uint32]chan *Message),
 	}
-	v.pipe = ConnectPipe(v, source)
-	return v
 }
 
-func (v *InvokerPipeRunner) Recv(p *PipeBase, pkt *RecvPacket) *RecvPacket {
-	if pkt.Message.Event == MsgReply {
-		p.RunCtrl(func() {
-			if reply, exists := v.invocations[pkt.Message.Id]; exists {
-				delete(v.invocations, pkt.Message.Id)
-				go func(msg *Message) {
-					reply <- msg
-					close(reply)
-				}(pkt.Message)
-				pkt = nil
-			}
-		})
+func (v *InvokerPipe) Recv() (*Message, error) {
+	for {
+		msg, err := v.Pipe.Recv()
+		if err != nil || msg == nil || msg.Event != MsgReply {
+			return msg, err
+		}
+		v.lock.RLock()
+		replyCh := v.invocations[msg.Id]
+		if replyCh != nil {
+			delete(v.invocations, msg.Id)
+		}
+		v.lock.RUnlock()
+		if replyCh != nil {
+			replyCh <- msg
+		} else {
+			return msg, err
+		}
 	}
-	return pkt
 }
 
-func (v *InvokerPipeRunner) Send(p *PipeBase, pkt *SendPacket) *SendPacket {
-	if pkt.Message.Event == MsgInvoke {
-		id := atomic.AddUint32(&v.id, 1)
-		pkt.Message.Id = id
-		reply := make(chan *Message)
-		p.RunCtrl(func() {
-			v.invocations[id] = reply
-		})
-		defer func() {
-			p.RunCtrl(func() {
-				delete(v.invocations, id)
-			})
-		}()
-		receipt := p.Source.Send(pkt.Message)
-		if receipt.Error != nil {
-			pkt.Result <- receipt
-			return nil
-		}
-
-		var timeout time.Duration = 0
-		for _, opt := range pkt.Options {
+func (v *InvokerPipe) Send(msg *Message, options ...interface{}) error {
+	if msg.Event == MsgInvoke {
+		var option *InvokeOptions = nil
+		for n, opt := range options {
 			if o, ok := opt.(*InvokeOptions); ok {
-				timeout = o.Timeout
+				option = o
+				options = append(options[0:n], options[n+1:]...)
+				break
 			}
 		}
+
+		id := atomic.AddUint32(&v.id, 1)
+		msg.Id = id
+
+		reply := make(chan *Message)
+		v.lock.Lock()
+		v.invocations[id] = reply
+		v.lock.Unlock()
+
+		defer func() {
+			v.lock.Lock()
+			delete(v.invocations, id)
+			v.lock.Unlock()
+		}()
+
+		if err := v.Pipe.Send(msg, options...); err != nil {
+			return err
+		}
+
 		var timeCh <-chan time.Time
-		if timeout > 0 {
-			timeCh = time.NewTimer(timeout).C
+		if option != nil && option.Timeout > 0 {
+			timeCh = time.NewTimer(option.Timeout).C
 		} else {
 			timeCh = make(chan time.Time)
 		}
 		select {
 		case <-timeCh:
-			pkt.Result <- &SendReceipt{Error: ErrorInvocationTimeout}
+			return ErrorInvocationTimeout
 		case msg, ok := (<-reply):
 			if !ok {
-				pkt.Result <- &SendReceipt{Error: ErrorInvocationAborted}
-			} else if msg.Error != "" {
-				pkt.Result <- &SendReceipt{
-					Error: errors.New(msg.Error),
-					Data:  RawMessage(msg.Data),
-				}
-			} else {
-				pkt.Result <- &SendReceipt{
-					Data: RawMessage(msg.Data),
-				}
+				return ErrorInvocationAborted
+			} else if option != nil {
+				option.Reply = msg
 			}
 		}
 		return nil
 	}
-	return pkt
+	return v.Pipe.Send(msg, options...)
 }
 
-func (v *InvokerPipeRunner) Close() error {
+func (v *InvokerPipe) Close() error {
+	v.lock.Lock()
 	for _, reply := range v.invocations {
 		close(reply)
 	}
-	return nil
+	v.invocations = make(map[uint32]chan *Message)
+	v.lock.Unlock()
+	return v.Pipe.Close()
 }
 
-func (v *InvokerPipeRunner) Pipe() MessagePipe {
-	return v.pipe
+func (v *InvokerPipe) Invoke(action string, payload RawMessage, timeout time.Duration) (RawMessage, error) {
+	return (&PipeInvoker{v}).Invoke(action, payload, timeout)
 }
 
-func (v *InvokerPipeRunner) Invoke(action string, payload RawMessage, timeout time.Duration) (RawMessage, error) {
-	return (&PipeInvoker{v.pipe}).Invoke(action, payload, timeout)
-}
-
-func (v *InvokerPipeRunner) Notify(event string, payload RawMessage) error {
-	return (&PipeInvoker{v.pipe}).Notify(event, payload)
+func (v *InvokerPipe) Notify(event string, payload RawMessage) error {
+	return (&PipeInvoker{v}).Notify(event, payload)
 }

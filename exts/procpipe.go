@@ -85,11 +85,19 @@ func NewRespawnProcStream(prog string, args ...string) *RespawnProcStream {
 }
 
 func (s *RespawnProcStream) Read(data []byte) (int, error) {
-	return s.currentProc().Read(data)
+	if proc := s.currentProc(); proc != nil {
+		return proc.Read(data)
+	} else {
+		return 0, io.EOF
+	}
 }
 
 func (s *RespawnProcStream) Write(data []byte) (int, error) {
-	return s.currentProc().Write(data)
+	if proc := s.currentProc(); proc != nil {
+		return proc.Write(data)
+	} else {
+		return 0, io.ErrClosedPipe
+	}
 }
 
 func (s *RespawnProcStream) Close() error {

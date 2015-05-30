@@ -57,78 +57,80 @@ func (d *dispatcherHandlers) ActionHandler(action string) ActionHandler {
 	return d.actionHandlers[action]
 }
 
-type DispatchPipeRunner struct {
-	pipe     *PipeBase
+type DispatchPipe struct {
+	Pipe MessagePipe
+
 	handlers DispatcherHandlers
 }
 
-func NewDispatchPipeRunnerWithHandlers(source MessagePipe, handlers DispatcherHandlers) *DispatchPipeRunner {
-	d := &DispatchPipeRunner{handlers: handlers}
-	d.pipe = ConnectPipe(d, source)
-	return d
+func NewDispatchPipeWithHandlers(source MessagePipe, handlers DispatcherHandlers) *DispatchPipe {
+	return &DispatchPipe{Pipe: source, handlers: handlers}
 }
 
-func NewDispatchPipeRunner(source MessagePipe) *DispatchPipeRunner {
-	return NewDispatchPipeRunnerWithHandlers(source, NewDispatcherHandlers())
+func NewDispatchPipe(source MessagePipe) *DispatchPipe {
+	return NewDispatchPipeWithHandlers(source, NewDispatcherHandlers())
 }
 
-func (d *DispatchPipeRunner) On(event string, handler EventHandler) Dispatcher {
+func (d *DispatchPipe) On(event string, handler EventHandler) Dispatcher {
 	d.handlers.On(event, handler)
 	return d
 }
 
-func (d *DispatchPipeRunner) Do(action string, handler ActionHandler) Dispatcher {
+func (d *DispatchPipe) Do(action string, handler ActionHandler) Dispatcher {
 	d.handlers.Do(action, handler)
 	return d
 }
 
-func (d *DispatchPipeRunner) Close() error {
-	return nil
+func (d *DispatchPipe) Close() error {
+	return d.Pipe.Close()
 }
 
-func (d *DispatchPipeRunner) Pipe() MessagePipe {
-	return d.pipe
-}
-
-func (d *DispatchPipeRunner) Recv(p *PipeBase, pkt *RecvPacket) *RecvPacket {
-	switch pkt.Message.Event {
-	case MsgNotify:
-		if handlers := d.handlers.EventHandlers(pkt.Message.Name); handlers != nil {
-			for _, handler := range handlers {
-				go func(handler EventHandler) {
-					handler(d.Pipe(), pkt.Message.Name, RawMessage(pkt.Message.Data))
-				}(handler)
-			}
-			return nil
+func (d *DispatchPipe) Recv() (*Message, error) {
+	for {
+		msg, err := d.Pipe.Recv()
+		if err != nil || msg == nil {
+			return msg, err
 		}
-	case MsgInvoke:
-		reply := &Message{
-			Event: MsgReply,
-			Id:    pkt.Message.Id,
-			Name:  pkt.Message.Name,
-		}
-		if handler := d.handlers.ActionHandler(pkt.Message.Name); handler != nil {
-			go func() {
-				result, err := handler(d.pipe, pkt.Message.Name, RawMessage(pkt.Message.Data))
-				reply.Data = json.RawMessage(result)
-				if err != nil {
-					reply.Error = err.Error()
+		switch msg.Event {
+		case MsgNotify:
+			if handlers := d.handlers.EventHandlers(msg.Name); handlers != nil {
+				for _, handler := range handlers {
+					go func(handler EventHandler) {
+						handler(d, msg.Name, RawMessage(msg.Data))
+					}(handler)
 				}
-				d.pipe.Send(reply)
-				// TODO send failure
-			}()
-		} else {
-			go func() {
-				reply.Error = "Action " + pkt.Message.Name + " not defined"
-				d.pipe.Send(reply)
-				// TODO send failure
-			}()
+			} else {
+				return msg, err
+			}
+		case MsgInvoke:
+			reply := &Message{
+				Event: MsgReply,
+				Id:    msg.Id,
+				Name:  msg.Name,
+			}
+			if handler := d.handlers.ActionHandler(msg.Name); handler != nil {
+				go func() {
+					result, err := handler(d, msg.Name, RawMessage(msg.Data))
+					reply.Data = json.RawMessage(result)
+					if err != nil {
+						reply.Error = err.Error()
+					}
+					d.Send(reply)
+					// TODO send failure
+				}()
+			} else {
+				go func() {
+					reply.Error = "Action " + msg.Name + " not defined"
+					d.Send(reply)
+					// TODO send failure
+				}()
+			}
+		default:
+			return msg, err
 		}
-		return nil
 	}
-	return pkt
 }
 
-func (d *DispatchPipeRunner) Send(p *PipeBase, pkt *SendPacket) *SendPacket {
-	return pkt
+func (d *DispatchPipe) Send(msg *Message, options ...interface{}) error {
+	return d.Pipe.Send(msg, options...)
 }

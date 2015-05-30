@@ -7,153 +7,127 @@ import (
 	"io"
 	"log"
 	"os"
+	"sync"
 )
 
 type StreamPipe struct {
-	Trace     bool
-	TraceName string
-	reader    io.ReadCloser
-	writer    io.WriteCloser
-	recvCh    chan *RecvPacket
-	sendCh    chan *sendRequest
+	reader io.ReadCloser
+	writer io.WriteCloser
+
+	lineReader *bufio.Reader
+	err        error
+	end        bool
+	writeLock  sync.Mutex
+
+	trace func(string, []byte)
 }
 
-type sendRequest struct {
-	content []byte
-	result  chan *SendReceipt
-}
-
-type readerCloserWrapper struct {
+type readCloserWrapper struct {
 	reader io.Reader
 }
 
-func (r *readerCloserWrapper) Read(data []byte) (int, error) {
+func (r *readCloserWrapper) Read(data []byte) (int, error) {
 	return r.reader.Read(data)
 }
 
-func (r *readerCloserWrapper) Close() error {
+func (r *readCloserWrapper) Close() error {
 	return nil
 }
 
-type writerCloserWrapper struct {
+type writeCloserWrapper struct {
 	writer io.Writer
 }
 
-func (r *writerCloserWrapper) Write(data []byte) (int, error) {
+func (r *writeCloserWrapper) Write(data []byte) (int, error) {
 	return r.writer.Write(data)
 }
 
-func (r *writerCloserWrapper) Close() error {
+func (r *writeCloserWrapper) Close() error {
 	return nil
 }
 
 func NewStreamPipe(reader io.ReadCloser, writer io.WriteCloser) *StreamPipe {
 	return &StreamPipe{
-		reader: reader,
-		writer: writer,
-		recvCh: make(chan *RecvPacket),
-		sendCh: make(chan *sendRequest),
+		reader:     reader,
+		writer:     writer,
+		lineReader: bufio.NewReader(reader),
+		trace:      func(string, []byte) {},
 	}
 }
 
 func NewStreamPipeNoCloser(reader io.Reader, writer io.Writer) *StreamPipe {
-	return NewStreamPipe(&readerCloserWrapper{reader}, &writerCloserWrapper{writer})
+	return NewStreamPipe(&readCloserWrapper{reader}, &writeCloserWrapper{writer})
 }
 
 func NewStreamPipeRW(rw io.ReadWriteCloser) *StreamPipe {
-	return NewStreamPipe(&readerCloserWrapper{rw}, rw)
+	return NewStreamPipe(&readCloserWrapper{rw}, rw)
 }
 
 func NewStreamPipeRWNoCloser(rw io.ReadWriter) *StreamPipe {
-	return NewStreamPipe(&readerCloserWrapper{rw}, &writerCloserWrapper{rw})
+	return NewStreamPipe(&readCloserWrapper{rw}, &writeCloserWrapper{rw})
 }
 
-func (p *StreamPipe) RecvChan() <-chan *RecvPacket {
-	return p.recvCh
-}
-
-func (p *StreamPipe) Run() {
-	recvCh := make(chan *RecvPacket)
-	defer func() {
-		close(p.recvCh)
-		p.reader.Close()
-		p.writer.Close()
-	}()
-	trace := p.traceFn()
-	go processJsonMsg(p.reader, recvCh, trace)
+func (p *StreamPipe) Recv() (*Message, error) {
 	for {
-		select {
-		case pkt := <-recvCh:
-			go func(pkt *RecvPacket) {
-				defer func() {
-					recover()
-				}()
-				p.recvCh <- pkt
-			}(pkt)
-		case req, ok := (<-p.sendCh):
-			if ok {
-				size, err := p.writer.Write(append(req.content, '\n'))
-				trace(">>", req.content)
-				req.result <- &SendReceipt{err, size}
+		if p.end {
+			return nil, nil
+		}
+		if p.err != nil {
+			p.end = true
+			err := p.err
+			p.err = nil
+			return nil, err
+		}
+
+		data, err := p.lineReader.ReadSlice('\n')
+		p.err = err
+		if len(data) > 0 {
+			msg := &Message{}
+			if json.Unmarshal(data, msg) == nil {
+				p.trace("<<", data)
+				return msg, nil
 			} else {
-				return
+				p.trace("!<", data)
 			}
+		} else if err == nil {
+			p.end = true
 		}
 	}
 }
 
-func (p *StreamPipe) Send(msg *Message, options ...interface{}) *SendReceipt {
+func (p *StreamPipe) Send(msg *Message, options ...interface{}) error {
 	if content, err := json.Marshal(msg); err != nil {
-		return &SendReceipt{Error: err}
+		return err
 	} else {
-		result := make(chan *SendReceipt)
-		p.sendCh <- &sendRequest{content, result}
-		return <-result
+		p.writeLock.Lock()
+		_, err := p.writer.Write(append(content, '\n'))
+		p.writeLock.Unlock()
+		if err == nil {
+			p.trace(">>", content)
+		} else {
+			p.trace("!>", content)
+		}
+		return err
 	}
 }
 
 func (p *StreamPipe) Close() error {
-	close(p.sendCh)
+	p.reader.Close()
+	p.writer.Close()
 	return nil
 }
 
-func (p *StreamPipe) traceFn() func(dir string, content []byte) {
-	if p.Trace {
-		logPrefix := p.TraceName
-		if logPrefix == "" {
-			logPrefix = fmt.Sprintf("[%d] ", os.Getpid())
-		} else {
-			logPrefix += " "
-		}
-		return func(dir string, content []byte) {
-			log.Println(logPrefix + dir + " " + string(content))
-		}
-	} else {
-		return func(string, []byte) {
-		}
-	}
+func (p *StreamPipe) TraceOff() {
+	p.trace = func(string, []byte) {}
 }
 
-func processJsonMsg(in io.Reader, report chan<- *RecvPacket, trace func(string, []byte)) {
-	reader := bufio.NewReader(in)
-	defer func() {
-		recover()
-	}()
-	for {
-		data, err := reader.ReadSlice('\n')
-		if data != nil {
-			msg := &Message{}
-			if json.Unmarshal(data, msg) == nil {
-				trace("<<", data)
-				report <- &RecvPacket{msg, data, nil}
-			} else if err == nil {
-				trace("!!", data)
-				report <- &RecvPacket{nil, data, nil}
-			}
-		}
-		if err != nil {
-			report <- &RecvPacket{nil, nil, err}
-			break
-		}
+func (p *StreamPipe) TraceOn(name string) {
+	if name == "" {
+		name = fmt.Sprintf("[%d] ", os.Getpid())
+	} else {
+		name += " "
+	}
+	p.trace = func(dir string, content []byte) {
+		log.Println(name + dir + " " + string(content))
 	}
 }

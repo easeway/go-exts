@@ -8,20 +8,14 @@ import (
 	"os"
 )
 
-func printMsg(prefix string, pkt *exts.RecvPacket) {
-	if pkt.Message != nil {
-		log.Printf(prefix+" < %s %v %s %s %s\n",
-			pkt.Message.Event,
-			pkt.Message.Id,
-			pkt.Message.Name,
-			pkt.Message.Data,
-			pkt.Message.Error,
-		)
-	} else if pkt.Error != nil {
-		log.Printf(prefix+" RECV ERROR: %v\n", pkt.Error)
-	} else if pkt.Raw != nil {
-		log.Printf(prefix+" ! %s\n", string(pkt.Raw))
-	}
+func printMsg(prefix string, msg *exts.Message) {
+	log.Printf(prefix+" < %s %v %s %s %s\n",
+		msg.Event,
+		msg.Id,
+		msg.Name,
+		string(msg.Data),
+		msg.Error,
+	)
 }
 
 type Payload struct {
@@ -30,10 +24,9 @@ type Payload struct {
 
 func run(name string, p *exts.StreamPipe) {
 	log.Printf(name+" START [%d]\n", os.Getpid())
-	p.Trace = true
-	p.TraceName = name + " "
-	v := exts.NewInvokerPipeRunner(p)
-	d := exts.NewDispatchPipeRunner(v.Pipe())
+	p.TraceOn(name)
+	v := exts.NewInvokerPipe(p)
+	d := exts.NewDispatchPipe(v)
 	d.Do("ping", func(p exts.MessagePipe, action string, data exts.RawMessage) (exts.RawMessage, error) {
 		val := &Payload{}
 		if err := json.Unmarshal(data, &val); err != nil {
@@ -47,7 +40,7 @@ func run(name string, p *exts.StreamPipe) {
 		exts.NotifyHelp(v).
 			WithEvent("bye").
 			Notify()
-		d.Pipe().Close()
+		d.Close()
 	})
 
 	go func() {
@@ -69,13 +62,12 @@ func run(name string, p *exts.StreamPipe) {
 				if err != nil {
 					log.Printf(name+" ERR: %v\n", err)
 				}
-				d.Pipe().Close()
+				d.Close()
 			}
 		}
 	}()
-	d.Pipe().Run()
+	exts.RunPipe(d)
 	log.Printf(name + " EXIT")
-
 }
 
 func runExt() {

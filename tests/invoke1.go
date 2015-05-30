@@ -9,20 +9,14 @@ import (
 	"sync"
 )
 
-func printMsg(prefix string, pkt *exts.RecvPacket) {
-	if pkt.Message != nil {
-		log.Printf(prefix+" < %s %v %s %s %s\n",
-			pkt.Message.Event,
-			pkt.Message.Id,
-			pkt.Message.Name,
-			pkt.Message.Data,
-			pkt.Message.Error,
-		)
-	} else if pkt.Error != nil {
-		log.Printf(prefix+" RECV ERROR: %v\n", pkt.Error)
-	} else if pkt.Raw != nil {
-		log.Printf(prefix+" ! %s\n", string(pkt.Raw))
-	}
+func printMsg(prefix string, msg *exts.Message) {
+	log.Printf(prefix+" < %s %v %s %s %s\n",
+		msg.Event,
+		msg.Id,
+		msg.Name,
+		string(msg.Data),
+		msg.Error,
+	)
 }
 
 type Payload struct {
@@ -32,9 +26,9 @@ type Payload struct {
 func runExt() {
 	log.Printf("EXTS START [%d]\n", os.Getpid())
 	p := exts.NewStreamPipeNoCloser(os.Stdin, os.Stdout)
-	p.Trace = true
-	v := exts.NewInvokerPipeRunner(p)
-	d := exts.NewDispatchPipeRunner(v.Pipe())
+	p.TraceOn("EXTS")
+	v := exts.NewInvokerPipe(p)
+	d := exts.NewDispatchPipe(v)
 	d.On("start", func(p exts.MessagePipe, event string, data exts.RawMessage) {
 		val := &Payload{}
 		if err := json.Unmarshal(data, &val); err != nil {
@@ -61,12 +55,12 @@ func runExt() {
 		}
 	}).On("bye", func(p exts.MessagePipe, event string, data exts.RawMessage) {
 		log.Println("EXTS BYE")
-		d.Pipe().Close()
+		d.Close()
 	})
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
-		d.Pipe().Run()
+		exts.RunPipe(d)
 		wg.Done()
 	}()
 
@@ -85,10 +79,11 @@ func runExt() {
 func runHost() {
 	log.Printf("HOST START [%d]\n", os.Getpid())
 	s := exts.NewRespawnProcStream(os.Args[0], "-x")
-	s.Pipe().Trace = true
 	s.Cmd.Stderr = os.Stdout
-	v := exts.NewInvokerPipeRunner(s.Pipe())
-	d := exts.NewDispatchPipeRunner(v.Pipe())
+	p := s.Pipe()
+	p.TraceOn("HOST")
+	v := exts.NewInvokerPipe(p)
+	d := exts.NewDispatchPipe(v)
 	d.Do("ping", func(p exts.MessagePipe, action string, data exts.RawMessage) (exts.RawMessage, error) {
 		val := &Payload{}
 		if err := json.Unmarshal(data, &val); err != nil {
@@ -107,7 +102,7 @@ func runHost() {
 			exts.NotifyHelp(v).
 				WithEvent("bye").
 				Notify()
-			d.Pipe().Close()
+			d.Close()
 		}
 		return nil, nil
 	}).On("ext", func(p exts.MessagePipe, action string, data exts.RawMessage) {
@@ -122,7 +117,7 @@ func runHost() {
 	})
 
 	s.Start()
-	d.Pipe().Run()
+	exts.RunPipe(d)
 	log.Printf("HOST EXIT")
 }
 

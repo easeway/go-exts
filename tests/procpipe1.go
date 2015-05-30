@@ -7,40 +7,33 @@ import (
 	"os"
 )
 
-func printMsg(prefix string, pkt *exts.RecvPacket) {
-	if pkt.Message != nil {
-		log.Printf(prefix+" < %s %v %s %s %s\n",
-			pkt.Message.Event,
-			pkt.Message.Id,
-			pkt.Message.Name,
-			pkt.Message.Data,
-			pkt.Message.Error,
-		)
-	} else if pkt.Error != nil {
-		log.Printf(prefix+" RECV ERROR: %v\n", pkt.Error)
-	} else if pkt.Raw != nil {
-		log.Printf(prefix+" ! %s\n", string(pkt.Raw))
-	}
+func printMsg(prefix string, msg *exts.Message) {
+	log.Printf(prefix+" < %s %v %s %s %s\n",
+		msg.Event,
+		msg.Id,
+		msg.Name,
+		string(msg.Data),
+		msg.Error,
+	)
 }
 
 func runExt() {
 	log.Println("EXTS START")
 	p := exts.NewStreamPipeNoCloser(os.Stdin, os.Stdout)
-	go p.Run()
 	for {
-		if pkt, ok := <-p.RecvChan(); ok {
-			printMsg("EXTS", pkt)
-			if pkt.Message != nil {
-				if receipt := p.Send(pkt.Message); receipt != nil && receipt.Error != nil {
-					log.Printf("EXTS SEND ERROR: %v\n", receipt.Error)
-				}
-			} else if pkt.Error != nil {
-				p.Close()
-			}
-		} else {
+		msg, err := p.Recv()
+		if msg == nil {
 			break
 		}
+		if err != nil {
+			panic(err)
+		}
+		printMsg("EXTS", msg)
+		if err := p.Send(msg); err != nil {
+			panic(err)
+		}
 	}
+	p.Close()
 	log.Printf("EXTS EXIT")
 }
 
@@ -50,7 +43,6 @@ func runHost() {
 	s.Cmd.Stderr = os.Stdout
 	p := s.Pipe()
 	s.Start()
-	go p.Run()
 	go func() {
 		log.Println("HOST SEND")
 		receipt := p.Send(&exts.Message{
@@ -63,22 +55,23 @@ func runHost() {
 		}
 	}()
 	for {
-		if pkt, ok := <-p.RecvChan(); ok {
-			printMsg("HOST", pkt)
-			if pkt.Message != nil {
-				pkt.Message.Id++
-				if r := p.Send(pkt.Message); r != nil && r.Error != nil {
-					log.Printf("HOST SEND ERROR: %v\n", r.Error)
-				}
-				if pkt.Message.Id >= 1000 {
-					p.Close()
-				}
-			}
-		} else {
+		msg, err := p.Recv()
+		if msg == nil {
 			break
 		}
-
+		if err != nil {
+			panic(err)
+		}
+		printMsg("HOST", msg)
+		msg.Id++
+		if err := p.Send(msg); err != nil {
+			panic(err)
+		}
+		if msg.Id >= 1000 {
+			break
+		}
 	}
+	p.Close()
 	log.Printf("HOST EXIT")
 }
 

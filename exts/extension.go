@@ -13,15 +13,14 @@ type Extension struct {
 	StreamPipe *StreamPipe
 }
 
-func NewExtension(name string) *Extension {
+func NewExtension() *Extension {
 	ext := &Extension{}
 	ext.StreamPipe = NewStreamPipeNoCloser(os.Stdin, os.Stdout)
-	ext.StreamPipe.TraceName = name
-	v := NewInvokerPipeRunner(ext.StreamPipe)
+	v := NewInvokerPipe(ext.StreamPipe)
 	ext.Invoker = v
-	d := NewDispatchPipeRunner(v.Pipe())
+	d := NewDispatchPipe(v)
 	ext.Dispatcher = d
-	ext.Pipe = d.Pipe()
+	ext.Pipe = d
 	return ext
 }
 
@@ -29,17 +28,12 @@ func (ext *Extension) Close() error {
 	return ext.Pipe.Close()
 }
 
-func (ext *Extension) RecvChan() <-chan *RecvPacket {
-	return ext.Pipe.RecvChan()
+func (ext *Extension) Recv() (*Message, error) {
+	return ext.Pipe.Recv()
 }
 
-func (ext *Extension) Send(msg *Message, options ...interface{}) *SendReceipt {
+func (ext *Extension) Send(msg *Message, options ...interface{}) error {
 	return ext.Pipe.Send(msg, options...)
-}
-
-func (ext *Extension) Run() {
-	UnconnectedEnd(ext.Pipe)
-	ext.Pipe.Run()
 }
 
 func (ext *Extension) Invoke(action string, payload RawMessage, timeout time.Duration) (RawMessage, error) {
@@ -66,6 +60,10 @@ func (ext *Extension) InvokeHelp() *InvokeHelper {
 
 func (ext *Extension) NotifyHelp() *NotifyHelper {
 	return NotifyHelp(ext.Invoker)
+}
+
+func (ext *Extension) Run() {
+	RunPipe(ext)
 }
 
 func (ext *Extension) Logger(prefix string, flag int) *log.Logger {

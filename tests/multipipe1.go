@@ -10,83 +10,26 @@ import (
 	"time"
 )
 
-func printMsg(prefix string, pkt *exts.RecvPacket) {
-	if pkt.Message != nil {
-		log.Printf(prefix+" < %s %v %s %s %s\n",
-			pkt.Message.Event,
-			pkt.Message.Id,
-			pkt.Message.Name,
-			pkt.Message.Data,
-			pkt.Message.Error,
-		)
-	} else if pkt.Error != nil {
-		log.Printf(prefix+" RECV ERROR: %v\n", pkt.Error)
-	} else if pkt.Raw != nil {
-		log.Printf(prefix+" ! %s\n", string(pkt.Raw))
-	}
+func printMsg(prefix string, msg *exts.Message) {
+	log.Printf(prefix+" < %s %v %s %s %s\n",
+		msg.Event,
+		msg.Id,
+		msg.Name,
+		string(msg.Data),
+		msg.Error,
+	)
 }
 
 type Payload struct {
 	Value int `json:"value"`
 }
 
-func run(name string, p *exts.StreamPipe) {
-	log.Printf(name+" START [%d]\n", os.Getpid())
-	p.Trace = true
-	p.TraceName = name + " "
-	v := exts.NewInvokerPipeRunner(p)
-	d := exts.NewDispatchPipeRunner(v.Pipe())
-	d.Do("ping", func(p exts.MessagePipe, action string, data exts.RawMessage) (exts.RawMessage, error) {
-		val := &Payload{}
-		if err := json.Unmarshal(data, &val); err != nil {
-			return nil, err
-		}
-		log.Printf(name+" %s %v\n", action, val.Value)
-		val.Value++
-		return json.Marshal(val)
-	}).On("bye", func(p exts.MessagePipe, action string, data exts.RawMessage) {
-		log.Println(name + " BYE")
-		exts.NotifyHelp(v).
-			WithEvent("bye").
-			Notify()
-		d.Pipe().Close()
-	})
-
-	go func() {
-		val := &Payload{0}
-		for {
-			err := exts.InvokeHelp(v).
-				WithAction("ping").
-				Marshal(val).
-				Invoke().
-				Unmarshal(val)
-			if err != nil {
-				log.Printf(name+" ERR: %v\n", err)
-			}
-			val.Value++
-			if val.Value > 1000 {
-				err = exts.NotifyHelp(v).
-					WithEvent("bye").
-					Notify()
-				if err != nil {
-					log.Printf(name+" ERR: %v\n", err)
-				}
-				d.Pipe().Close()
-			}
-		}
-	}()
-	d.Pipe().Run()
-	log.Printf(name + " EXIT")
-
-}
-
 func runExt(name string) {
 	p := exts.NewStreamPipeNoCloser(os.Stdin, os.Stdout)
 	log.Printf(name+" START [%d]\n", os.Getpid())
-	p.Trace = true
-	p.TraceName = name + " "
-	v := exts.NewInvokerPipeRunner(p)
-	d := exts.NewDispatchPipeRunner(v.Pipe())
+	p.TraceOn(name)
+	v := exts.NewInvokerPipe(p)
+	d := exts.NewDispatchPipe(v)
 	val := &Payload{0}
 	d.On("reset", func(p exts.MessagePipe, event string, data exts.RawMessage) {
 		val.Value = 0
@@ -108,12 +51,12 @@ func runExt(name string) {
 				Invoke().
 				Unmarshal(val)
 			if err != nil {
-				panic(err)
+				log.Println(err)
 			}
 			//time.Sleep(time.Second)
 		}
 	}()
-	d.Pipe().Run()
+	exts.RunPipe(d)
 	log.Println(name + " EXIT")
 }
 
@@ -124,16 +67,16 @@ func runHost(numExt, iterations int) {
 		s := exts.NewRespawnProcStream(os.Args[0], "-x", "-r", fmt.Sprintf("EXT-%d", i))
 		//s.Cmd.Stderr = os.Stdout
 		p := s.Pipe()
-		p.Trace = true
-		p.TraceName = fmt.Sprintf("HOST-%d ", i)
-		v := exts.NewInvokerPipeRunner(p)
-		d.AddPipe(p.TraceName, v.Pipe())
+		name := fmt.Sprintf("HOST-%d ", i)
+		p.TraceOn(name)
+		v := exts.NewInvokerPipe(p)
+		d.AddPipe(name, v)
 		s.Start()
 	}
 	d.Do("incr", func(p exts.MessagePipe, action string, data exts.RawMessage) (exts.RawMessage, error) {
 		val := &Payload{}
 		if err := json.Unmarshal(data, val); err != nil {
-			panic(err)
+			log.Println(err)
 		}
 		err := exts.InvokeHelp(&exts.PipeInvoker{p}).
 			WithAction("report").
@@ -141,7 +84,7 @@ func runHost(numExt, iterations int) {
 			Invoke().
 			Error
 		if err != nil {
-			panic(err)
+			log.Println(err)
 		}
 		val.Value++
 		return json.Marshal(val)

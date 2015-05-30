@@ -9,20 +9,14 @@ import (
 	"os"
 )
 
-func printMsg(prefix string, pkt *exts.RecvPacket) {
-	if pkt.Message != nil {
-		log.Printf(prefix+" < %s %v %s %s %s\n",
-			pkt.Message.Event,
-			pkt.Message.Id,
-			pkt.Message.Name,
-			pkt.Message.Data,
-			pkt.Message.Error,
-		)
-	} else if pkt.Error != nil {
-		log.Printf(prefix+" RECV ERROR: %v\n", pkt.Error)
-	} else if pkt.Raw != nil {
-		log.Printf(prefix+" ! %s\n", string(pkt.Raw))
-	}
+func printMsg(prefix string, msg *exts.Message) {
+	log.Printf(prefix+" < %s %v %s %s %s\n",
+		msg.Event,
+		msg.Id,
+		msg.Name,
+		string(msg.Data),
+		msg.Error,
+	)
 }
 
 type Payload struct {
@@ -32,8 +26,8 @@ type Payload struct {
 
 func runExt(name string) {
 	log.Printf(name+" START [%d]\n", os.Getpid())
-	ext := exts.NewExtension(name)
-	ext.StreamPipe.Trace = true
+	ext := exts.NewExtension()
+	ext.StreamPipe.TraceOn(name)
 	ext.Do("poll", func(p exts.MessagePipe, action string, data exts.RawMessage) (exts.RawMessage, error) {
 		content, err := json.Marshal(&Payload{name, 1})
 		go func() {
@@ -49,8 +43,10 @@ func runHost(numExt, iterations int) {
 	log.Printf("HOST START [%d]\n", os.Getpid())
 	host := exts.NewExtensionHost()
 	for i := 0; i < numExt; i++ {
-		ext := host.Load(fmt.Sprintf("HOST-%d", i), os.Args[0], "-x", "-r", fmt.Sprintf("EXT-%d", i))
-		ext.StreamPipe.Trace = true
+		name := fmt.Sprintf("HOST-%d", i)
+		ext := host.Load(name, os.Args[0], "-x", "-r", fmt.Sprintf("EXT-%d", i))
+		ext.StreamPipe.TraceOn(name)
+		ext.Start()
 	}
 	host.Dispatcher.
 		On("refresh", func(p exts.MessagePipe, action string, data exts.RawMessage) {
