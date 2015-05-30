@@ -1,0 +1,68 @@
+package exts
+
+import (
+	"os"
+	"time"
+)
+
+type Extension struct {
+	Invoker    Invoker
+	Dispatcher Dispatcher
+	Pipe       MessagePipe
+	StreamPipe *StreamPipe
+}
+
+func NewExtension(name string) *Extension {
+	ext := &Extension{}
+	ext.StreamPipe = NewStreamPipeNoCloser(os.Stdin, os.Stdout)
+	ext.StreamPipe.TraceName = name
+	v := NewInvokerPipeRunner(ext.StreamPipe)
+	ext.Invoker = v
+	d := NewDispatchPipeRunner(v.Pipe())
+	ext.Dispatcher = d
+	ext.Pipe = d.Pipe()
+	return ext
+}
+
+func (ext *Extension) Close() error {
+	return ext.Pipe.Close()
+}
+
+func (ext *Extension) RecvChan() <-chan *RecvPacket {
+	return ext.Pipe.RecvChan()
+}
+
+func (ext *Extension) Send(msg *Message, options ...interface{}) *SendReceipt {
+	return ext.Pipe.Send(msg, options...)
+}
+
+func (ext *Extension) Run() {
+	UnconnectedEnd(ext.Pipe)
+	ext.Pipe.Run()
+}
+
+func (ext *Extension) Invoke(action string, payload RawMessage, timeout time.Duration) (RawMessage, error) {
+	return ext.Invoker.Invoke(action, payload, timeout)
+}
+
+func (ext *Extension) Notify(event string, payload RawMessage) error {
+	return ext.Invoker.Notify(event, payload)
+}
+
+func (ext *Extension) On(event string, handler EventHandler) Dispatcher {
+	ext.Dispatcher.On(event, handler)
+	return ext
+}
+
+func (ext *Extension) Do(action string, handler ActionHandler) Dispatcher {
+	ext.Dispatcher.Do(action, handler)
+	return ext
+}
+
+func (ext *Extension) InvokeHelp() *InvokeHelper {
+	return InvokeHelp(ext.Invoker)
+}
+
+func (ext *Extension) NotifyHelp() *NotifyHelper {
+	return NotifyHelp(ext.Invoker)
+}
