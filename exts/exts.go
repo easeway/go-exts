@@ -18,7 +18,7 @@ type Message struct {
 	Id    uint32          `json:"id,omitempty"`
 	Name  string          `json:"name"`
 	Data  json.RawMessage `json:"data,omitempty"`
-	Error string          `json:"error"`
+	Error string          `json:"error,omitempty"`
 }
 
 type RecvPacket struct {

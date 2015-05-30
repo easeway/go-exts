@@ -51,23 +51,33 @@ func (p *PipeBase) Run() {
 		p.Source.Close()
 		p.runner.Close()
 	}()
-	for !p.Stop {
+	for {
 		select {
 		case r, ok := (<-p.Source.RecvChan()):
 			if ok {
 				if r.Error == nil && r.Message != nil {
-					pkt := p.runner.Recv(p, r)
-					if pkt != nil {
-						p.RecvCh <- pkt
-					}
+					go func(pkt *RecvPacket) {
+						defer func() {
+							recover()
+						}()
+						pkt = p.runner.Recv(p, pkt)
+						if pkt != nil {
+							p.RecvCh <- pkt
+						}
+					}(r)
 				}
 			}
 		case s, ok := (<-p.SendCh):
 			if ok {
-				pkt := p.runner.Send(p, s)
-				if pkt != nil {
-					s.Result <- p.Source.Send(s.Message)
-				}
+				go func(pkt *SendPacket) {
+					defer func() {
+						recover()
+					}()
+					pkt = p.runner.Send(p, pkt)
+					if pkt != nil {
+						pkt.Result <- p.Source.Send(pkt.Message)
+					}
+				}(s)
 			}
 		case fn, ok := (<-p.CtrlCh):
 			if !ok {

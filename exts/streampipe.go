@@ -84,12 +84,12 @@ func (p *StreamPipe) Run() {
 	for {
 		select {
 		case pkt := <-recvCh:
-			go func() {
+			go func(pkt *RecvPacket) {
 				defer func() {
 					recover()
 				}()
 				p.recvCh <- pkt
-			}()
+			}(pkt)
 		case req, ok := (<-p.sendCh):
 			if ok {
 				size, err := p.writer.Write(append(req.content, '\n'))

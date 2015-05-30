@@ -108,9 +108,9 @@ func (s *RespawnProcStream) Run() {
 		cmd := *s.Cmd
 		var err error = nil
 		if s.proc, err = ProcStreamFromCmd(&cmd); err == nil {
-			go func() {
-				notify <- s.proc.Cmd.Run()
-			}()
+			go func(proc *ProcStream) {
+				notify <- proc.Cmd.Run()
+			}(s.proc)
 			for running := true; running; {
 				select {
 				case <-notify:

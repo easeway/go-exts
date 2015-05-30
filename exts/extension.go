@@ -1,6 +1,7 @@
 package exts
 
 import (
+	"log"
 	"os"
 	"time"
 )
@@ -65,4 +66,8 @@ func (ext *Extension) InvokeHelp() *InvokeHelper {
 
 func (ext *Extension) NotifyHelp() *NotifyHelper {
 	return NotifyHelp(ext.Invoker)
+}
+
+func (ext *Extension) Logger(prefix string, flag int) *log.Logger {
+	return log.New(os.Stderr, prefix, flag)
 }

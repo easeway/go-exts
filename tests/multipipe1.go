@@ -97,6 +97,8 @@ func runExt(name string) {
 		}
 		log.Printf(name+" REPORT %v\n", reportVal.Value)
 		return nil, nil
+	}).Do("sample", func(p exts.MessagePipe, event string, data exts.RawMessage) (exts.RawMessage, error) {
+		return json.Marshal(&name)
 	})
 	go func() {
 		for {

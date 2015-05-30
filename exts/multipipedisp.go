@@ -17,6 +17,7 @@ type MultiPipeDispatcher interface {
 	Run()
 	Broadcast(event string, payload RawMessage)
 	AddPipe(name string, pipe MessagePipe) MultiPipeDispatcher
+	Invoker(name string) Invoker
 }
 
 type namedPipeWrapper struct {
@@ -78,26 +79,37 @@ func (d *multiPipeDispatcher) Broadcast(event string, payload RawMessage) {
 		Data:  json.RawMessage(payload),
 	}
 	for _, pipe := range d.pipes {
-		go pipe.Send(msg)
+		go func(pipe MessagePipe) {
+			pipe.Send(msg)
+		}(pipe)
 	}
+}
+
+func (d *multiPipeDispatcher) Invoker(name string) Invoker {
+	if pipe, exists := d.pipes[name]; exists {
+		return &PipeInvoker{pipe}
+	}
+	return nil
 }
 
 func (d *multiPipeDispatcher) Run() {
 	var wg sync.WaitGroup
 	for _, pipe := range d.pipes {
 		wg.Add(1)
-		go func() {
+		go func(pipe MessagePipe) {
 			UnconnectedEnd(pipe)
 			pipe.Run()
 			wg.Done()
-		}()
+		}(pipe)
 	}
 	wg.Wait()
 }
 
 func (d *multiPipeDispatcher) Close() error {
 	for _, pipe := range d.pipes {
-		go pipe.Close()
+		go func(pipe MessagePipe) {
+			pipe.Close()
+		}(pipe)
 	}
 	return nil
 }

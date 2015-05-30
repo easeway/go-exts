@@ -95,7 +95,9 @@ func (d *DispatchPipeRunner) Recv(p *PipeBase, pkt *RecvPacket) *RecvPacket {
 	case MsgNotify:
 		if handlers := d.handlers.EventHandlers(pkt.Message.Name); handlers != nil {
 			for _, handler := range handlers {
-				go handler(d.Pipe(), pkt.Message.Name, RawMessage(pkt.Message.Data))
+				go func(handler EventHandler) {
+					handler(d.Pipe(), pkt.Message.Name, RawMessage(pkt.Message.Data))
+				}(handler)
 			}
 			return nil
 		}
@@ -107,7 +109,7 @@ func (d *DispatchPipeRunner) Recv(p *PipeBase, pkt *RecvPacket) *RecvPacket {
 		}
 		if handler := d.handlers.ActionHandler(pkt.Message.Name); handler != nil {
 			go func() {
-				result, err := handler(d.Pipe(), pkt.Message.Name, RawMessage(pkt.Message.Data))
+				result, err := handler(d.pipe, pkt.Message.Name, RawMessage(pkt.Message.Data))
 				reply.Data = json.RawMessage(result)
 				if err != nil {
 					reply.Error = err.Error()

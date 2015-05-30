@@ -26,7 +26,7 @@ type InvokeHelper struct {
 	Action  string
 	Payload RawMessage
 	Timeout time.Duration
-	Result  RawMessage
+	Reply   RawMessage
 	Error   error
 }
 
@@ -59,7 +59,7 @@ func (v *InvokeHelper) WithTimeout(timeout time.Duration) *InvokeHelper {
 }
 
 func (v *InvokeHelper) Invoke() *InvokeHelper {
-	v.Result, v.Error = v.Invoker.Invoke(v.Action, v.Payload, v.Timeout)
+	v.Reply, v.Error = v.Invoker.Invoke(v.Action, v.Payload, v.Timeout)
 	return v
 }
 
@@ -67,7 +67,11 @@ func (v *InvokeHelper) Unmarshal(d interface{}) error {
 	if v.Error != nil {
 		return v.Error
 	}
-	return json.Unmarshal(v.Result, d)
+	return json.Unmarshal(v.Reply, d)
+}
+
+func (v *InvokeHelper) Result() (RawMessage, error) {
+	return v.Reply, v.Error
 }
 
 func (v *InvokeHelper) Succeeded() bool {
@@ -154,12 +158,16 @@ func NewInvokerPipeRunner(source MessagePipe) *InvokerPipeRunner {
 
 func (v *InvokerPipeRunner) Recv(p *PipeBase, pkt *RecvPacket) *RecvPacket {
 	if pkt.Message.Event == MsgReply {
-		if reply, exists := v.invocations[pkt.Message.Id]; exists {
-			delete(v.invocations, pkt.Message.Id)
-			reply <- pkt.Message
-			close(reply)
-			return nil
-		}
+		p.RunCtrl(func() {
+			if reply, exists := v.invocations[pkt.Message.Id]; exists {
+				delete(v.invocations, pkt.Message.Id)
+				go func(msg *Message) {
+					reply <- msg
+					close(reply)
+				}(pkt.Message)
+				pkt = nil
+			}
+		})
 	}
 	return pkt
 }
@@ -168,14 +176,20 @@ func (v *InvokerPipeRunner) Send(p *PipeBase, pkt *SendPacket) *SendPacket {
 	if pkt.Message.Event == MsgInvoke {
 		id := atomic.AddUint32(&v.id, 1)
 		pkt.Message.Id = id
+		reply := make(chan *Message)
+		p.RunCtrl(func() {
+			v.invocations[id] = reply
+		})
+		defer func() {
+			p.RunCtrl(func() {
+				delete(v.invocations, id)
+			})
+		}()
 		receipt := p.Source.Send(pkt.Message)
 		if receipt.Error != nil {
 			pkt.Result <- receipt
 			return nil
 		}
-
-		reply := make(chan *Message)
-		v.invocations[id] = reply
 
 		var timeout time.Duration = 0
 		for _, opt := range pkt.Options {
@@ -183,38 +197,29 @@ func (v *InvokerPipeRunner) Send(p *PipeBase, pkt *SendPacket) *SendPacket {
 				timeout = o.Timeout
 			}
 		}
-
-		go func() {
-			defer func() {
-				p.RunCtrl(func() {
-					delete(v.invocations, id)
-				})
-			}()
-
-			var timeCh <-chan time.Time
-			if timeout > 0 {
-				timeCh = time.NewTimer(timeout).C
+		var timeCh <-chan time.Time
+		if timeout > 0 {
+			timeCh = time.NewTimer(timeout).C
+		} else {
+			timeCh = make(chan time.Time)
+		}
+		select {
+		case <-timeCh:
+			pkt.Result <- &SendReceipt{Error: ErrorInvocationTimeout}
+		case msg, ok := (<-reply):
+			if !ok {
+				pkt.Result <- &SendReceipt{Error: ErrorInvocationAborted}
+			} else if msg.Error != "" {
+				pkt.Result <- &SendReceipt{
+					Error: errors.New(msg.Error),
+					Data:  RawMessage(msg.Data),
+				}
 			} else {
-				timeCh = make(chan time.Time)
-			}
-			select {
-			case <-timeCh:
-				pkt.Result <- &SendReceipt{Error: ErrorInvocationTimeout}
-			case msg, ok := (<-reply):
-				if !ok {
-					pkt.Result <- &SendReceipt{Error: ErrorInvocationAborted}
-				} else if msg.Error != "" {
-					pkt.Result <- &SendReceipt{
-						Error: errors.New(msg.Error),
-						Data:  RawMessage(msg.Data),
-					}
-				} else {
-					pkt.Result <- &SendReceipt{
-						Data: RawMessage(msg.Data),
-					}
+				pkt.Result <- &SendReceipt{
+					Data: RawMessage(msg.Data),
 				}
 			}
-		}()
+		}
 		return nil
 	}
 	return pkt
