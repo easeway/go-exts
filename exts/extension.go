@@ -62,8 +62,8 @@ func (ext *Extension) NotifyHelp() *NotifyHelper {
 	return NotifyHelp(ext.Invoker)
 }
 
-func (ext *Extension) Run() {
-	RunPipe(ext)
+func (ext *Extension) Run() error {
+	return RunPipe(ext)
 }
 
 func (ext *Extension) Logger(prefix string, flag int) *log.Logger {

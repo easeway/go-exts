@@ -3,6 +3,7 @@ package exts
 import (
 	"encoding/json"
 	"io"
+	"log"
 	"sync"
 )
 
@@ -94,12 +95,14 @@ func (d *multiPipeDispatcher) Invoker(name string) Invoker {
 
 func (d *multiPipeDispatcher) Run() {
 	var wg sync.WaitGroup
-	for _, pipe := range d.pipes {
+	for name, pipe := range d.pipes {
 		wg.Add(1)
-		go func(pipe MessagePipe) {
-			pipe.Recv()
+		go func(name string, pipe MessagePipe) {
+			log.Printf("PIPE START %s\n", name)
+			err := RunPipe(pipe)
+			log.Printf("PIPE STOP %s ERR: %v\n", name, err)
 			wg.Done()
-		}(pipe)
+		}(name, pipe)
 	}
 	wg.Wait()
 }

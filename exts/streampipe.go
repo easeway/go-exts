@@ -79,7 +79,7 @@ func (p *StreamPipe) Recv() (*Message, error) {
 			return nil, err
 		}
 
-		data, err := p.lineReader.ReadSlice('\n')
+		data, err := p.lineReader.ReadBytes('\n')
 		p.err = err
 		if len(data) > 0 {
 			msg := &Message{}
