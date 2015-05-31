@@ -84,20 +84,34 @@ func NewRespawnProcStream(prog string, args ...string) *RespawnProcStream {
 	return RespawnProcStreamFromCmd(exec.Command(prog, args...))
 }
 
-func (s *RespawnProcStream) Read(data []byte) (int, error) {
-	if proc := s.currentProc(); proc != nil {
-		return proc.Read(data)
-	} else {
-		return 0, io.EOF
+func (s *RespawnProcStream) performIo(iofn func(proc *ProcStream) (int, error), nilErr error) (int, error) {
+	for {
+		if proc := s.currentProc(); proc != nil {
+			if n, err := iofn(proc); err == nil {
+				return n, err
+			} else if n > 0 {
+				return n, nil
+			} else if proc.Cmd.Process != nil {
+				// process still running, unable to communicate
+				// kill the process and wait until it starts again
+				proc.Cmd.Process.Kill()
+			}
+		} else {
+			return 0, nilErr
+		}
 	}
 }
 
+func (s *RespawnProcStream) Read(data []byte) (int, error) {
+	return s.performIo(func(proc *ProcStream) (int, error) {
+		return proc.Read(data)
+	}, io.EOF)
+}
+
 func (s *RespawnProcStream) Write(data []byte) (int, error) {
-	if proc := s.currentProc(); proc != nil {
+	return s.performIo(func(proc *ProcStream) (int, error) {
 		return proc.Write(data)
-	} else {
-		return 0, io.ErrClosedPipe
-	}
+	}, io.ErrClosedPipe)
 }
 
 func (s *RespawnProcStream) Close() error {
