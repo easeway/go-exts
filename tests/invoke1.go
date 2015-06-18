@@ -3,6 +3,7 @@ package main
 import (
 	"../exts"
 	"encoding/json"
+	"errors"
 	"flag"
 	"log"
 	"os"
@@ -42,7 +43,7 @@ func runExt() {
 			Invoke().
 			Unmarshal(val)
 		if err != nil {
-			panic(err)
+			log.Printf("PING ERROR: %v\n", err)
 		}
 		log.Printf("EXTS BYE WITH %v\n", val.Value)
 		err = exts.InvokeHelp(v).
@@ -51,7 +52,7 @@ func runExt() {
 			Invoke().
 			Error
 		if err != nil {
-			panic(err)
+			log.Printf("BYE INVOKE ERR: %v\n", err)
 		}
 	}).On("bye", func(p exts.MessagePipe, event string, data exts.RawMessage) {
 		log.Println("EXTS BYE")
@@ -91,16 +92,21 @@ func runHost() {
 		}
 		val.Value++
 		log.Printf("HOST PING TO %v\n", val.Value)
-		return json.Marshal(val)
+		encoded, err := json.Marshal(val)
+		if err == nil {
+			err = errors.New("NO ERROR")
+		}
+		return encoded, err
 	}).Do("bye", func(p exts.MessagePipe, action string, data exts.RawMessage) (exts.RawMessage, error) {
 		val := &Payload{}
 		if err := json.Unmarshal(data, &val); err != nil {
 			return nil, err
 		}
 		log.Println("HOST BYE INVOKED")
-		if val.Value == 3 {
+		if val.Value >= 2 {
 			exts.NotifyHelp(v).
 				WithEvent("bye").
+				Marshal(val).
 				Notify()
 			d.Close()
 		}

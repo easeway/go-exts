@@ -127,6 +127,9 @@ func (v *PipeInvoker) Invoke(action string, payload RawMessage, timeout time.Dur
 	if option.Reply == nil {
 		return nil, err
 	}
+	if err == nil && option.Reply.Error != "" {
+		err = errors.New(option.Reply.Error)
+	}
 	return RawMessage(option.Reply.Data), err
 }
 
